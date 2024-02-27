@@ -1,42 +1,128 @@
-import json
 import queue
 import socket
 import threading
 import time
+import pickle
+
+
+def debito():
+    while True:
+        try:
+            global SALDO_ATUAL
+            # paga da fila os clientes com operacao de debito
+            dados, endereco = FILA_DEBITO.get(block=False)
+            with LOCK:
+                valor = dados["valor_operacao"]
+                conta_cliente = dados["conta_cliente"]
+                if SALDO_ATUAL - valor > 0:
+                    SALDO_ATUAL -= valor
+                    dados_bytes = pickle.dumps(
+                        {
+                            "conta_cliente": conta_cliente,
+                            "debitado": valor,
+                            "saldo_atual": SALDO_ATUAL,
+                        }
+                    )
+                    sock.sendto(dados_bytes, endereco)
+                else:
+                    msg = pickle.dumps(
+                        {"conta_cliente": conta_cliente, "msg": "saldo insuficiente"}
+                    )
+                    sock.sendto(msg, endereco)
+
+            print(f"Saldo atual: {SALDO_ATUAL}")
+
+        except queue.Empty:
+            time.sleep(30)
+
+
+def credito():
+    while True:
+        try:
+            global SALDO_ATUAL
+            # paga da fila os clientes com operacao de credito
+            dados, endereco = FILA_CREDITO.get(block=False)
+            with LOCK:
+                valor = dados["valor_operacao"]
+                conta_cliente = dados["conta_cliente"]
+
+                SALDO_ATUAL += valor
+                dados_bytes = pickle.dumps(
+                    {
+                        "conta_cliente": conta_cliente,
+                        "creditado": valor,
+                        "saldo_atual": SALDO_ATUAL,
+                    }
+                )
+                sock.sendto(dados_bytes, endereco)
+            print(f"Saldo atual: {SALDO_ATUAL}")
+
+        except queue.Empty:
+            time.sleep(20)
 
 
 def transaction_coordinator():
     while True:
         try:
-            dados, endereco = FILA.get(block=False)
-            dados_convertido = json.loads(dados.decode())
-            for chave in list(dados_convertido.keys()):
-                if chave != "tipo_operacao" and chave != "valor_operacao":
-                    del dados_convertido[chave]
-            dados_json = json.dumps(dados_convertido)
-            sock.sendto(dados_json.encode(), SHARD_A_B)
-            resposta, endereco_resultado = sock.recvfrom(1024)
-            print(resposta[0])
-            sock.sendto(b"OK", endereco_resultado)
-            sock.sendto(b"OK", endereco)
+            # paga da fila os clientes
+            dados_bytes, endereco = FILA_CLIENTE.get(block=False)
+
+            dados = pickle.loads(dados_bytes)
+
+            # envia confirmacao de recebido
+            msg = pickle.dumps(
+                f"requisicao recebida do cliente {dados['conta_cliente']}"
+            )
+            sock.sendto(msg, endereco)
+
+            # coloca na fila de debito
+            if dados["tipo_operacao"] == "D":
+                FILA_DEBITO.put((dados, endereco))
+
+            # coloca na fila de credito
+            elif dados["tipo_operacao"] == "C":
+                FILA_CREDITO.put((dados, endereco))
+
+            else:
+                conta_cliente = dados["conta_cliente"]
+                msg = pickle.dumps(
+                    {"conta_cliente": conta_cliente, "msg": "operacao nao disponivel"}
+                )
+                sock.sendto(msg, endereco)
+
         except queue.Empty:
-            print("Fila vazia")
-            time.sleep(5)
+            time.sleep(10)
 
 
-UDP_IP = "127.0.0.1"
+UDP_IP = ""
 UDP_PORT = 5005
-FILA = queue.Queue()
-SHARD_A_B = ("localhost", 5006)
+FILA_CLIENTE = queue.Queue()
+FILA_CREDITO = queue.Queue()
+FILA_DEBITO = queue.Queue()
+
+# trava para lidar com area critica
+LOCK = threading.Lock()
+
+# saldo atual
+SALDO_ATUAL = 1000
 
 sock = socket.socket(
     socket.AF_INET,
     socket.SOCK_DGRAM,
 )
+
 sock.bind((UDP_IP, UDP_PORT))
 
-t = threading.Thread(target=transaction_coordinator, name="Thread 1")
-t.start()
+thread_cliente = threading.Thread(target=transaction_coordinator, name="Thread 1")
+thread_debito = threading.Thread(target=debito, name="Thread 1")
+thread_credito = threading.Thread(target=credito, name="Thread 1")
+thread_cliente.start()
+thread_debito.start()
+thread_credito.start()
+
 while True:
-    FILA.put(sock.recvfrom(1024))
-    print("Requisicao na fila")
+    print("servidor iniciado")
+    dados_bytes, endereco = sock.recvfrom(1024)
+
+    # coloca na fila de clientes
+    FILA_CLIENTE.put((dados_bytes, endereco))

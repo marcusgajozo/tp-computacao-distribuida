@@ -1,7 +1,10 @@
 import socket
-import json
+import pickle
+import datetime
+import random
 
-UDP_IP = "127.0.0.1"
+
+UDP_IP = "192.168.185.193"
 UDP_PORT = 5005
 
 print("UDP target IP: %s" % UDP_IP)
@@ -12,20 +15,21 @@ sock = socket.socket(
     socket.SOCK_DGRAM,
 )  # UDP
 
-data_operacao = input("data: ")
-conta_cliente = input("conta: ")
-tipo_operacao = input("tipo de operacao: ")
-valor_operacao = int(input("valor: "))
 
-dados_json = json.dumps(
-    {
-        "data_operacao": data_operacao,
-        "conta_cliente": conta_cliente,
-        "tipo_operacao": tipo_operacao,
-        "valor_operacao": valor_operacao,
-    }
-)
+for i in range(20):
+    dados_bytes = pickle.dumps(
+        {
+            "data_operacao": datetime.datetime.now(),
+            "conta_cliente": f"00{i}",
+            "tipo_operacao": random.choice(["C", "D"]),
+            "valor_operacao": random.randint(100, 500),
+        }
+    )
+    sock.sendto(dados_bytes, (UDP_IP, UDP_PORT))
 
-sock.sendto(dados_json.encode(), (UDP_IP, UDP_PORT))
-data, endereco = sock.recvfrom(1024)
-print(f"Recebido: {data}")
+
+for i in range(20):
+    data, endereco = sock.recvfrom(1024)
+    print(f"recebido: {pickle.loads(data)}")
+    data, endereco = sock.recvfrom(1024)
+    print(f"resultado: {pickle.loads(data)}")
